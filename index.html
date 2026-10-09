@@ -1,0 +1,172 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Конфигуратор сети хабов — демо-прототип</title>
+<style>
+:root{--bg:#f6f7f9;--card:#fff;--ink:#14213d;--mut:#5b6677;--line:#e2e6ec;--acc:#1f5eff;--acc2:#e4572e;--ok:#18a058}
+@media (prefers-color-scheme:dark){:root{--bg:#0f1420;--card:#171e2e;--ink:#eaf0ff;--mut:#97a3b8;--line:#2a3550;--acc:#5b8cff;--acc2:#ff7a52;--ok:#3ccf86}}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);font:15px/1.45 system-ui,-apple-system,Segoe UI,Roboto,sans-serif}
+.wrap{max-width:980px;margin:0 auto;padding:20px 16px 40px}
+h1{font-size:22px;margin:0 0 4px}
+.sub{color:var(--mut);margin:0 0 16px}
+.badge{display:inline-block;font-size:12px;border:1px solid var(--line);border-radius:99px;padding:2px 10px;color:var(--mut);margin-bottom:10px}
+.card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:16px;margin-bottom:14px}
+.ctl{display:flex;flex-wrap:wrap;gap:14px;align-items:center}
+.ctl label{font-size:14px;color:var(--mut)}
+input[type=range]{width:200px;vertical-align:middle}
+button{font:inherit;font-weight:600;border:0;border-radius:10px;padding:11px 18px;cursor:pointer;color:#fff;background:var(--acc)}
+button.alt{background:var(--acc2)}
+button:focus-visible{outline:3px solid var(--ink);outline-offset:2px}
+.grid{display:grid;grid-template-columns:1fr 1fr;gap:14px}
+@media(max-width:720px){.grid{grid-template-columns:1fr}}
+table{width:100%;border-collapse:collapse;font-size:14px}
+th,td{text-align:left;padding:6px 8px;border-bottom:1px solid var(--line)}
+th{color:var(--mut);font-weight:600}
+td.n,th.n{text-align:right;font-variant-numeric:tabular-nums}
+.big{font-size:28px;font-weight:700}
+.kpi{display:flex;gap:24px;flex-wrap:wrap;margin-bottom:8px}
+.kpi div span{display:block;color:var(--mut);font-size:13px}
+.tag{display:inline-block;background:color-mix(in srgb,var(--acc) 15%,transparent);color:var(--acc);border-radius:6px;padding:1px 8px;margin:2px 4px 2px 0;font-weight:600;font-size:13px}
+.bar{height:12px;border-radius:6px;background:var(--acc);min-width:2px}
+.bar.b2{background:var(--acc2)}
+.note{font-size:12.5px;color:var(--mut)}
+.warn{color:var(--acc2);font-weight:600}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <span class="badge">Демо-прототип · данные условные</span>
+  <h1>Конфигуратор сети хабов: Китай → Россия</h1>
+  <p class="sub">Система поддержки решений: какие хабы держать и откуда обслуживать регионы. Перебор всех конфигураций из 5 хабов (31 вариант).</p>
+
+  <div class="card">
+    <div class="ctl">
+      <label>Рост тарифов на плечо из Китая: <b id="tv">0</b>%<br>
+        <input id="tariff" type="range" min="0" max="100" step="5" value="0" aria-label="Рост тарифов, %"></label>
+      <button id="b1">Рассчитать сеть</button>
+      <button id="b2" class="alt">Стресс-тест</button>
+    </div>
+  </div>
+
+  <div id="out"></div>
+
+  <p class="note">Все цифры (тарифы, спрос, стоимость хранения, сроки) — иллюстративные допущения для демонстрации логики, а не реальные данные компании. На реальных данных вместо перебора используется MILP-модель. Сухопутные хабы (Новосибирск, Екатеринбург, Москва, Краснодар) в сценарии «граница закрыта» получают +14 дней и +15% к стоимости входа; морской вход (Владивосток) в модели не затрагивается.</p>
+</div>
+
+<script>
+// ---- Условные исходные данные ----
+const HUBS = [
+  {id:'Владивосток', lat:43.12, lon:131.89, fixed:120, inb:6,  days:12, land:false},
+  {id:'Новосибирск', lat:55.03, lon:82.92,  fixed:90,  inb:10, days:12, land:true},
+  {id:'Екатеринбург',lat:56.84, lon:60.61,  fixed:100, inb:13, days:14, land:true},
+  {id:'Москва',      lat:55.75, lon:37.62,  fixed:220, inb:18, days:18, land:true},
+  {id:'Краснодар',   lat:45.04, lon:38.98,  fixed:110, inb:20, days:20, land:true}
+];
+const REGIONS = [ // спрос, тыс. т/год
+  {id:'Центр',     lat:55.75, lon:37.62, d:40},
+  {id:'Северо-Запад',lat:59.93,lon:30.34,d:18},
+  {id:'Поволжье',  lat:56.33, lon:44.0,  d:14},
+  {id:'Юг',        lat:47.22, lon:39.72, d:14},
+  {id:'Урал',      lat:56.84, lon:60.61, d:10},
+  {id:'Сибирь',    lat:55.03, lon:82.92, d:8},
+  {id:'Дальний Восток',lat:43.12,lon:131.89,d:6}
+];
+const KM_RATE = 0.0035;   // тыс. ₽ за т·км
+const ROAD = 1.3;         // коэффициент извилистости
+const SPEED = 600;        // км/сутки
+const DAY_COST = 0.4;     // тыс. ₽/т за сутки в пути (капитал, устаревание)
+
+function dist(a,b){const R=6371,t=x=>x*Math.PI/180;
+  const dl=t(b.lat-a.lat),dn=t(b.lon-a.lon);
+  const h=Math.sin(dl/2)**2+Math.cos(t(a.lat))*Math.cos(t(b.lat))*Math.sin(dn/2)**2;
+  return 2*R*Math.asin(Math.sqrt(h))*ROAD;}
+
+function unitCost(h,r,sc){
+  const k=dist(h,r);
+  let inb=h.inb*(1+sc.tariff/100), days=h.days+k/SPEED;
+  if(sc.border && h.land){inb*=1.15; days+=14;}
+  return inb + k*KM_RATE + days*DAY_COST;
+}
+function evalSet(set,sc){
+  let fixed=0, var_=0, asg={};
+  set.forEach(h=>fixed+=h.fixed);
+  REGIONS.forEach(r=>{
+    let best=null,bc=1e18;
+    set.forEach(h=>{const c=unitCost(h,r,sc); if(c<bc){bc=c;best=h;}});
+    asg[r.id]={hub:best.id,unit:bc}; var_+=bc*r.d;
+  });
+  return {fixed,var_,total:fixed+var_,asg,set:set.map(h=>h.id)};
+}
+function optimize(sc){
+  let best=null;
+  for(let m=1;m<(1<<HUBS.length);m++){
+    const set=HUBS.filter((_,i)=>m>>i&1);
+    const e=evalSet(set,sc);
+    if(!best||e.total<best.total)best=e;
+  }
+  return best;
+}
+const fmt=x=>Math.round(x).toLocaleString('ru-RU');
+const tags=a=>a.map(x=>`<span class="tag">${x}</span>`).join('');
+
+function renderCalc(sc,label){
+  const o=optimize(sc);
+  const rows=REGIONS.map(r=>`<tr><td>${r.id}</td><td>${o.asg[r.id].hub}</td><td class="n">${o.asg[r.id].unit.toFixed(1)}</td></tr>`).join('');
+  document.getElementById('out').innerHTML=`
+  <div class="card">
+    <b>${label}</b>
+    <div class="kpi" style="margin-top:10px">
+      <div><span>Оптимальная сеть</span>${tags(o.set)}</div>
+      <div><span>Суммарные затраты, млн ₽/год</span><span class="big" style="color:var(--ink);font-size:28px">${fmt(o.total)}</span></div>
+      <div><span>из них хранение / доставка</span>${fmt(o.fixed)} / ${fmt(o.var_)}</div>
+    </div>
+    <div class="grid">
+      <table><thead><tr><th>Регион</th><th>Обслуживает хаб</th><th class="n">тыс. ₽/т</th></tr></thead><tbody>${rows}</tbody></table>
+      <div class="note" style="align-self:center">Модель выбирает набор хабов с минимальной суммой: хранение + вход из Китая + доставка по России + «стоимость времени» в пути.</div>
+    </div>
+  </div>`;
+}
+
+function renderStress(){
+  const t=+document.getElementById('tariff').value;
+  const base={tariff:0,border:false};
+  const scs=[
+    {n:'Базовый',sc:base},
+    {n:`Тарифы +${Math.max(t,30)}%`,sc:{tariff:Math.max(t,30),border:false}},
+    {n:'Граница закрыта на 2 недели',sc:{tariff:0,border:true}},
+    {n:`Тарифы +${Math.max(t,30)}% и граница`,sc:{tariff:Math.max(t,30),border:true}}
+  ];
+  const baseOpt=optimize(base);
+  const baseSet=HUBS.filter(h=>baseOpt.set.includes(h.id));
+  let max=0;
+  const res=scs.map(s=>{
+    const keep=evalSet(baseSet,s.sc).total, opt=optimize(s.sc);
+    max=Math.max(max,keep,opt.total);
+    return {n:s.n,keep,opt};
+  });
+  const rows=res.map(r=>{
+    const loss=r.keep-r.opt.total;
+    return `<tr><td>${r.n}</td><td>${tags(r.opt.set)}</td>
+      <td class="n">${fmt(r.keep)}<div class="bar b2" style="width:${r.keep/max*100}%"></div></td>
+      <td class="n">${fmt(r.opt.total)}<div class="bar" style="width:${r.opt.total/max*100}%"></div></td>
+      <td class="n ${loss>0.5?'warn':''}">${loss>0.5?'экономия '+fmt(loss):'—'}</td></tr>`}).join('');
+  document.getElementById('out').innerHTML=`
+  <div class="card">
+    <b>Стресс-тест: что будет, если оставить сеть как есть, и что даёт пересмотр</b>
+    <div class="note" style="margin:6px 0 10px">Базовая сеть: ${tags(baseOpt.set)}</div>
+    <table><thead><tr><th>Сценарий</th><th>Оптимальная сеть</th><th class="n">Старая сеть, млн ₽</th><th class="n">Пересмотр, млн ₽</th><th class="n">Выигрыш от пересмотра</th></tr></thead><tbody>${rows}</tbody></table>
+  </div>`;
+}
+
+const tariff=document.getElementById('tariff'), tv=document.getElementById('tv');
+tariff.addEventListener('input',()=>{tv.textContent=tariff.value});
+document.getElementById('b1').onclick=()=>{
+  const t=+tariff.value; renderCalc({tariff:t,border:false},`Расчёт при росте тарифов на ${t}%`)};
+document.getElementById('b2').onclick=renderStress;
+renderCalc({tariff:0,border:false},'Расчёт при текущих тарифах');
+</script>
+</body>
+</html>
